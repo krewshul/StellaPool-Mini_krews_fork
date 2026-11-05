@@ -3,6 +3,7 @@
 #ifndef HEADER_Pool_hpp
 #define HEADER_Pool_hpp
 
+#include <atomic>
 #include <curl/curl.h>
 #include <fcntl.h>
 #include <map>
@@ -72,10 +73,27 @@ struct Round {
 	std::optional<std::string> finder;
 };
 
-struct Share { // Just used for recent statistics, not actual share data
+struct WorkerStats {
+	uint32_t id;
+	std::string name;
+	std::string ip;
+	uint16_t port;
+	uint64_t connectedAt;
+	std::optional<uint64_t> disconnectedAt;
+	uint64_t lastShareAt = 0;
+	uint64_t acceptedShares = 0;
+	uint64_t rejectedShares = 0;
+	uint64_t bestSharePrimeCount = 0;
+};
+
+struct Share {
 	uint64_t timestamp;
+	uint32_t workerId;
 	std::string finder;
 	bool valid;
+	std::string rejectReason;
+	std::optional<uint64_t> primeCount;
+	std::optional<uint64_t> minimumPrimeCount;
 };
 
 constexpr int maxEvents(16);
@@ -83,18 +101,23 @@ constexpr int maxMessageLength(32768);
 constexpr double jobRefreshInterval(30.);
 constexpr double maxInactivityTime(1800.);
 constexpr uint64_t recentSharesTime(3600ULL);
+constexpr std::size_t maxRecentShareRecords(1000);
 inline const std::string poolSignature("/SPM/");
 class Pool {
 	const std::vector<uint8_t> _scriptPubKey;
-	bool _running;
+	std::atomic<bool> _running;
 	std::map<int, std::shared_ptr<Worker>> _workers; // Indexed by File Descriptors
+	std::atomic<std::size_t> _workerCount{0}; // Thread-safe worker count for statistics
 	std::chrono::time_point<std::chrono::steady_clock> _latestJobTp;
 	std::vector<StratumJob> _currentJobs;
 	uint64_t _currentJobId;
 	std::vector<Round> _rounds;
 	std::vector<Share> _recentShares; // For recent statistics
+	std::map<uint32_t, WorkerStats> _workerStats;
+	uint64_t _acceptedShares = 0;
+	uint64_t _rejectedShares = 0;
 	std::set<std::string> _roundOffsets; // For duplicate shares detection
-	std::mutex _roundUpdateMutex; // Used when a new Round is started
+	std::mutex _stateMutex; // Protects shared worker, round, and share statistics
 	std::thread _statsUpdater;
 	CURL *_curlMain;
 	
@@ -103,6 +126,14 @@ class Pool {
 	std::string _generateMiningNotify(const bool); // Generates a Stratum.Notify message
 	std::pair<std::string, bool> _processMessage(const std::pair<std::shared_ptr<Worker>, std::string>&); // Processes a Stratum Message from a worker, the Bool indicates whether the worker should be disconnected
 	void _startNewRound(const uint32_t); // Inserts a new round
+	void _recordShare(
+		const std::shared_ptr<Worker>&,
+		const bool,
+		const std::string&,
+		const std::optional<uint64_t>& = {},
+		const std::optional<uint64_t>& = {}
+	);
+	void _removeWorker(const int); // Removes a worker and updates the worker count safely
 	void _updateStats(); // Updates Stat Files
 	void _fetchJob(); // Fetches work from the Riecoin server using GetBlockTemplate
 public:

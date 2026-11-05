@@ -194,7 +194,7 @@ uint64_t Pool::_checkPoW(const StratumJob& job, const std::vector<uint8_t>& nOff
 	mpz_import(primorialFactor.get_mpz_t(), 16, -1, sizeof(uint8_t), 0, 0, &rawOffset[14]);
 	mpz_import(primorialOffset.get_mpz_t(), 12, -1, sizeof(uint8_t), 0, 0, &rawOffset[2]);
 	const mpz_class target(job.bh.target(job.powVersion, (offsetFirst16 & 65504U) >> 5)),
-	                offset(primorial - (target % primorial) + primorialFactor*primorial + primorialOffset);
+			offset(primorial - (target % primorial) + primorialFactor*primorial + primorialOffset);
 	if (offset >= offsetLimit)
 		return 0U;
 	const mpz_class result(target + offset);
@@ -326,6 +326,10 @@ std::pair<std::string, bool> Pool::_processMessage(const std::pair<std::shared_p
 				return {stratumErrorStr(messageId, 20, "Missing or invalid name"s), true};
 			}
 			worker->name = name;
+			{
+				const std::lock_guard lock(_stateMutex);
+				_workerStats[worker->id].name = name;
+			}
 			worker->state = Worker::State::AUTHORIZED;
 			LOGMSG("Authorized " << worker->str() << "; user " << worker->name);
 			return {stratumResponseStr(messageId, "true") + _generateMiningNotify(true) + "{\"id\": null, \"method\": \"client.show_message\", \"params\": [\"Hello "s + worker->name + ", Happy Mining!\"]}\n"s, false};
@@ -346,32 +350,32 @@ std::pair<std::string, bool> Pool::_processMessage(const std::pair<std::shared_p
 		}
 		catch (std::exception &e) {
 			LOGMSG("Received invalid submission (invalid parameters) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "invalid_params");
 			return {stratumErrorStr(messageId, 20, "Invalid params"s), true};
 		}
 		if (name != worker->name) {
 			LOGMSG("Received invalid submission (wrong name) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "wrong_worker_name");
 			return {stratumErrorStr(messageId, 20, "Wrong name"s), true};
 		}
 		if (!isHexStrOfSize(extranonce2, 2U*extraNonce2Length)) {
 			LOGMSG("Received invalid submission (invalid Extra Nonce 2) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "invalid_extranonce2");
 			return {stratumErrorStr(messageId, 20, "Invalid Extra Nonce 2 (must be "s + std::to_string(2U*extraNonce2Length) + " hex digits"s), true};
 		}
 		if (!isHexStr(nTime)) {
 			LOGMSG("Received invalid submission (invalid nTime) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "invalid_ntime");
 			return {stratumErrorStr(messageId, 20, "Invalid nTime (must be a hex str)"s), true};
 		}
 		if (!isHexStrOfSize(nOffset, 64)) {
 			LOGMSG("Received invalid submission (invalid nOffset) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "invalid_noffset");
 			return {stratumErrorStr(messageId, 20, "Invalid nOffset (must be 64 hex digits)"s), true};
 		}
 		if (_roundOffsets.find(nOffset) != _roundOffsets.end()) {
 			LOGMSG("Received invalid submission (duplicate share) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "duplicate_share");
 			return {stratumErrorStr(messageId, 22, "Duplicate share"s), true};
 		}
 		uint64_t jobId;
@@ -380,6 +384,7 @@ std::pair<std::string, bool> Pool::_processMessage(const std::pair<std::shared_p
 		}
 		catch (const std::exception &e) { // This should never happen as a Hex Check was previously done
 			ERRORMSG("SToLl failed for some reason while decoding the Job Id - " << e.what());
+					_recordShare(worker, false, "invalid_job_id");
 			ERRORMSG("Submission was " << message.second);
 			return {stratumErrorStr(messageId, 20, "Internal error :|"s), true};
 		}
@@ -394,7 +399,7 @@ std::pair<std::string, bool> Pool::_processMessage(const std::pair<std::shared_p
 		}
 		if (!jobFound) {
 			// LOGMSG("Received invalid submission (job not found) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "job_not_found");
 			return {stratumErrorStr(messageId, 21, "Job not found"s), false};
 		}
 		uint64_t shareTimestamp;
@@ -403,35 +408,35 @@ std::pair<std::string, bool> Pool::_processMessage(const std::pair<std::shared_p
 		}
 		catch (const std::exception &e) { // This should never happen as a Hex Check was previously done
 			ERRORMSG("SToLl failed for some reason while decoding the Timestamp - " << e.what());
+					_recordShare(worker, false, "invalid_timestamp");
 			ERRORMSG("Submission was " << message.second);
 			return {stratumErrorStr(messageId, 20, "Internal error :|"s), true};
 		}
 		if (shareTimestamp < shareJob.bh.curtime) {
 			LOGMSG("Received invalid submission (timestamp too early) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "timestamp_too_early");
 			return {stratumErrorStr(messageId, 20, "Timestamp too early (please check your system clock)"s), true};
 		}
 		else if (shareTimestamp > nowU64() + 5) {
 			LOGMSG("Received invalid submission (timestamp too late) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "timestamp_too_late");
 			return {stratumErrorStr(messageId, 20, "Timestamp too late (please check your system clock))"s), true};
 		}
 		const std::vector<uint8_t> nOffsetV8(reverse(hexStrToV8(nOffset)));
 		if ((*reinterpret_cast<const uint16_t*>(&nOffsetV8.data()[0]) & 31) != 2) {
 			LOGMSG("Received invalid submission (invalid PoW Version) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "invalid_pow_version");
 			return {stratumErrorStr(messageId, 20, "Invalid PoW Version"s), true};
 		}
 		shareJob.merkleRootGen(worker->extraNonce1, extranonce2);
 		const uint64_t sharePrimeCount(_checkPoW(shareJob, nOffsetV8)), sharePrimeCountMin(std::max(4ULL, shareJob.acceptedPatterns[0].size() - 2ULL));
 		if (sharePrimeCount < sharePrimeCountMin) {
 			LOGMSG("Received invalid submission (too low Share Prime Count) from " << worker->str());
-			_recentShares.push_back(Share{nowU64(), name, false});
+			_recordShare(worker, false, "low_prime_count", sharePrimeCount, sharePrimeCountMin);
 			return {stratumErrorStr(messageId, 23, "Received a "s + std::to_string(sharePrimeCount) + "-share, "s + std::to_string(sharePrimeCountMin) + "-shares or better expected"s), true};
 		}
 		_roundOffsets.insert(nOffset);
-		_rounds.back().shares++;
-		_recentShares.push_back(Share{nowU64(), name, true});
+		_recordShare(worker, true, "", sharePrimeCount, sharePrimeCountMin);
 		worker->latestShareTp = std::chrono::steady_clock::now();
 		if (sharePrimeCount > sharePrimeCountMin)
 			LOGMSG("Accepted " << sharePrimeCount << "-share from " << worker->str() << " (" << worker->name << ")");
@@ -462,13 +467,15 @@ std::pair<std::string, bool> Pool::_processMessage(const std::pair<std::shared_p
 				std::string blockHash;
 				try {
 					blockHash = _sendRequestToWallet(_curlMain, "getblockhash", {shareJob.height})["result"];
-					const std::lock_guard lock(_roundUpdateMutex);
-					_rounds.back().heightEnd = shareJob.height;
-					_rounds.back().timeEnd = nowU64();
-					_rounds.back().blockHash = blockHash;
-					_rounds.back().difficulty = decodeBits(shareJob.bh.bits, shareJob.powVersion);
-					_rounds.back().reward = shareJob.coinbasevalue;
-					_rounds.back().finder = name;
+					{
+						const std::lock_guard lock(_stateMutex);
+						_rounds.back().heightEnd = shareJob.height;
+						_rounds.back().timeEnd = nowU64();
+						_rounds.back().blockHash = blockHash;
+						_rounds.back().difficulty = decodeBits(shareJob.bh.bits, shareJob.powVersion);
+						_rounds.back().reward = shareJob.coinbasevalue;
+						_rounds.back().finder = name;
+					}
 					_startNewRound(shareJob.height + 1);
 				}
 				catch (std::exception &e) {
@@ -491,55 +498,221 @@ std::pair<std::string, bool> Pool::_processMessage(const std::pair<std::shared_p
 }
 
 void Pool::_startNewRound(const uint32_t heightStart) {
-	_rounds.push_back({.id = static_cast<uint32_t>(_rounds.size()), .heightStart = heightStart, .heightEnd = {}, .timeStart = nowU64(), .timeEnd = {}, .confirmations = 0, .blockHash = {}, .difficulty = {}, .reward = {}, .shares = 0U, .finder = {}});
+	{
+		const std::lock_guard lock(_stateMutex);
+		_rounds.push_back({.id = static_cast<uint32_t>(_rounds.size()), .heightStart = heightStart, .heightEnd = {}, .timeStart = nowU64(), .timeEnd = {}, .confirmations = 0, .blockHash = {}, .difficulty = {}, .reward = {}, .shares = 0U, .finder = {}});
+	}
 	_roundOffsets.clear();
+}
+
+void Pool::_recordShare(
+	const std::shared_ptr<Worker>& worker,
+	const bool valid,
+	const std::string& rejectReason,
+	const std::optional<uint64_t>& primeCount,
+	const std::optional<uint64_t>& minimumPrimeCount
+) {
+	const uint64_t timestamp = nowU64();
+	const std::lock_guard lock(_stateMutex);
+
+	_recentShares.push_back(Share{
+		timestamp,
+		worker->id,
+		worker->name,
+		valid,
+		rejectReason,
+		primeCount,
+		minimumPrimeCount
+	});
+
+	if (_recentShares.size() > maxRecentShareRecords)
+		_recentShares.erase(
+			_recentShares.begin(),
+			_recentShares.begin() + (_recentShares.size() - maxRecentShareRecords)
+		);
+
+	WorkerStats& stats = _workerStats[worker->id];
+	stats.lastShareAt = timestamp;
+
+	if (valid) {
+		++_acceptedShares;
+		++stats.acceptedShares;
+
+		if (primeCount && *primeCount > stats.bestSharePrimeCount)
+			stats.bestSharePrimeCount = *primeCount;
+
+		if (!_rounds.empty())
+			++_rounds.back().shares;
+	}
+	else {
+		++_rejectedShares;
+		++stats.rejectedShares;
+	}
+}
+
+void Pool::_removeWorker(const int fileDescriptor) {
+	const auto workerIt = _workers.find(fileDescriptor);
+	if (workerIt == _workers.end())
+		return;
+
+	const std::shared_ptr<Worker> worker = workerIt->second;
+	{
+		const std::lock_guard lock(_stateMutex);
+		const auto statsIt = _workerStats.find(worker->id);
+		if (statsIt != _workerStats.end())
+			statsIt->second.disconnectedAt = nowU64();
+	}
+
+	_workers.erase(workerIt);
+	_workerCount.fetch_sub(1, std::memory_order_relaxed);
 }
 
 void Pool::_updateStats() {
 	CURL *curlStatsUpdater(curl_easy_init());
 	std::chrono::time_point<std::chrono::steady_clock> latestDbUpdateTp(std::chrono::steady_clock::now());
+
 	while (_running) {
-		// LOGMSG("Updating Stats...");
-		for (int i(std::max(static_cast<int>(_rounds.size() - 101), 0)) ; i + 1 < static_cast<int>(_rounds.size())  ; i++) {
-			if (_rounds[i].confirmations < 0) // Already Orphaned (-1 Confirmation)
+		// Take a snapshot before performing wallet RPC requests.
+		std::vector<Round> roundsToCheck;
+		{
+			const std::lock_guard lock(_stateMutex);
+			roundsToCheck = _rounds;
+		}
+
+		std::vector<std::pair<std::size_t, int>> confirmationUpdates;
+
+		const std::size_t firstRoundToCheck =
+			roundsToCheck.size() > 101 ? roundsToCheck.size() - 101 : 0;
+
+		for (std::size_t i(firstRoundToCheck); i + 1 < roundsToCheck.size(); i++) {
+			const Round &round = roundsToCheck[i];
+
+			if (round.confirmations < 0)
 				continue;
-			if (_rounds[i].confirmations >= 100) { // Aesthetic, avoid things like 101/100 Confirmations in Ui
-				_rounds[i].confirmations = 100;
+
+			if (round.confirmations >= 100) {
+				confirmationUpdates.emplace_back(i, 100);
 				continue;
 			}
+
+			if (!round.blockHash.has_value())
+				continue;
+
 			try {
-				const nlohmann::json block(_sendRequestToWallet(curlStatsUpdater, "getblock", {_rounds[i].blockHash.value()})["result"]);
-				_rounds[i].confirmations = block["confirmations"];
-				if (_rounds[i].confirmations < 0) {
-					LOGMSG("Block found in Round " << _rounds[i].id << " was orphaned :|");
-					_rounds[i].reward = 0ULL;
-				}
+				const nlohmann::json block(
+					_sendRequestToWallet(
+						curlStatsUpdater,
+						"getblock",
+						{round.blockHash.value()}
+					)["result"]
+				);
+
+				const int confirmations = block["confirmations"].get<int>();
+				confirmationUpdates.emplace_back(i, confirmations);
+
+				if (confirmations < 0)
+					LOGMSG("Block found in Round " << round.id << " was orphaned :|");
 			}
 			catch (const std::exception &e) {
-				ERRORMSG("Could not get number of confirmations for Block " << _rounds[i].blockHash.value() << ", it will be attempted again - " << e.what());
-				continue;
+				ERRORMSG("Could not get number of confirmations for Block "
+					<< round.blockHash.value()
+					<< ", it will be attempted again - " << e.what());
 			}
 		}
-		
-		std::string roundsJsonStr, recentSharesJsonStr, roundsHtmlStr;
-		roundsJsonStr = "["s;
-		for (const auto &round : _rounds) {
-			roundsJsonStr += "{\"id\":"s + std::to_string(round.id)
-			+ ", \"heightStart\":"s + std::to_string(round.heightStart)
-			+ ", \"heightEnd\":"s + (round.heightEnd.has_value() ? std::to_string(round.heightEnd.value()) : "null"s)
-			+ ", \"timeStart\":"s + std::to_string(round.timeStart)
-			+ ", \"timeEnd\":"s + (round.timeEnd.has_value() ? std::to_string(round.timeEnd.value()) : "null"s)
-			+ ", \"confirmations\":"s + std::to_string(round.confirmations)
-			+ ", \"blockHash\":"s + (round.blockHash.has_value() ? ("\""s + round.blockHash.value() + "\""s) : "null"s)
-			+ ", \"difficulty\":"s + (round.difficulty.has_value() ? std::to_string(round.difficulty.value()) : "null"s)
-			+ ", \"reward\":"s +  (round.reward.has_value() ? std::to_string(round.reward.value()) : "null"s)
-			+ ", \"shares\":"s +  std::to_string(round.shares)
-			+ ", \"finder\":"s + (round.finder.has_value() ? ("\""s + round.finder.value() + "\""s) : "null"s) + "}"s;
-			if (round.id != _rounds.back().id)
-				roundsJsonStr += ","s;
+
+		// Apply RPC results and take the snapshots used for this update.
+		std::vector<Round> roundsSnapshot;
+		std::vector<Share> recentSharesSnapshot;
+		std::map<uint32_t, WorkerStats> workerStatsSnapshot;
+		uint64_t acceptedSharesSnapshot = 0;
+		uint64_t rejectedSharesSnapshot = 0;
+
+		{
+			const std::lock_guard lock(_stateMutex);
+
+			for (const auto &[index, confirmations] : confirmationUpdates) {
+				if (index >= _rounds.size())
+					continue;
+
+				_rounds[index].confirmations = confirmations;
+
+				if (confirmations < 0)
+					_rounds[index].reward = 0ULL;
+			}
+
+			std::erase_if(_recentShares, [](const auto &entry) {
+				return nowU64() - entry.timestamp >= recentSharesTime;
+			});
+
+			roundsSnapshot = _rounds;
+			recentSharesSnapshot = _recentShares;
+			workerStatsSnapshot = _workerStats;
+			acceptedSharesSnapshot = _acceptedShares;
+			rejectedSharesSnapshot = _rejectedShares;
 		}
-		roundsJsonStr += "]"s;
-		
+
+		const std::size_t workerCount =
+			_workerCount.load(std::memory_order_relaxed);
+
+		nlohmann::json statsJson;
+		statsJson["pool"] = {
+			{"workerCount", workerCount},
+			{"acceptedShares", acceptedSharesSnapshot},
+			{"rejectedShares", rejectedSharesSnapshot}
+		};
+
+		statsJson["rounds"] = nlohmann::json::array();
+
+		for (const auto &round : roundsSnapshot) {
+			statsJson["rounds"].push_back({
+				{"id", round.id},
+				{"heightStart", round.heightStart},
+				{"heightEnd", round.heightEnd ? nlohmann::json(*round.heightEnd) : nlohmann::json(nullptr)},
+				{"timeStart", round.timeStart},
+				{"timeEnd", round.timeEnd ? nlohmann::json(*round.timeEnd) : nlohmann::json(nullptr)},
+				{"confirmations", round.confirmations},
+				{"blockHash", round.blockHash ? nlohmann::json(*round.blockHash) : nlohmann::json(nullptr)},
+				{"difficulty", round.difficulty ? nlohmann::json(*round.difficulty) : nlohmann::json(nullptr)},
+				{"reward", round.reward ? nlohmann::json(*round.reward) : nlohmann::json(nullptr)},
+				{"shares", round.shares},
+				{"finder", round.finder ? nlohmann::json(*round.finder) : nlohmann::json(nullptr)}
+			});
+		}
+
+		statsJson["workers"] = nlohmann::json::array();
+
+		for (const auto &[id, worker] : workerStatsSnapshot) {
+			statsJson["workers"].push_back({
+				{"id", id},
+				{"name", worker.name},
+				{"ip", worker.ip},
+				{"port", worker.port},
+				{"connectedAt", worker.connectedAt},
+				{"disconnectedAt", worker.disconnectedAt ? nlohmann::json(*worker.disconnectedAt) : nlohmann::json(nullptr)},
+				{"lastShareAt", worker.lastShareAt},
+				{"acceptedShares", worker.acceptedShares},
+				{"rejectedShares", worker.rejectedShares},
+				{"bestSharePrimeCount", worker.bestSharePrimeCount}
+			});
+		}
+
+		statsJson["recentShares"] = nlohmann::json::array();
+
+		for (const auto &share : recentSharesSnapshot) {
+			statsJson["recentShares"].push_back({
+				{"timestamp", share.timestamp},
+				{"workerId", share.workerId},
+				{"finder", share.finder},
+				{"valid", share.valid},
+				{"rejectReason", share.rejectReason},
+				{"primeCount", share.primeCount ? nlohmann::json(*share.primeCount) : nlohmann::json(nullptr)},
+				{"minimumPrimeCount", share.minimumPrimeCount ? nlohmann::json(*share.minimumPrimeCount) : nlohmann::json(nullptr)}
+			});
+		}
+
+		std::string roundsJsonStr = statsJson.dump(4);
+		std::string roundsHtmlStr;
+
 		roundsHtmlStr = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"s
 			"body {color: rgba(255, 255, 255, 0.8); background-color: rgb(16, 0, 24);}"s
 			"a {color: rgba(255, 255, 255, 0.9);}"s
@@ -548,58 +721,114 @@ void Pool::_updateStats() {
 			"th {background: rgba(255, 255, 255, 0.125);}"s
 			"</style><title>"s + versionString + " Recent Stats</title></head><body>"s
 			"<h1>"s + versionString + "</h1>";
-			
-		roundsHtmlStr += "<p>Pool session started on "s + timeStr(_rounds[0].timeStart) + " ("s + formattedDuration(nowU64() - _rounds[0].timeStart) + " ago)</p>"s;
-		
+
+		if (!roundsSnapshot.empty()) {
+			roundsHtmlStr += "<p>Pool session started on "s
+				+ timeStr(roundsSnapshot.front().timeStart)
+				+ " ("s
+				+ formattedDuration(nowU64() - roundsSnapshot.front().timeStart)
+				+ " ago)</p>"s;
+		}
+
 		roundsHtmlStr += "<h2>Status</h2>"s;
-		roundsHtmlStr += "<p>"s + std::to_string(_workers.size()) + " worker connection(s)</p>"s;
+		roundsHtmlStr += "<p>"s + std::to_string(workerCount) + " worker connection(s)</p>"s;
 		roundsHtmlStr += "<p>Last Update: "s + timeNowStr() + "</p>"s;
-		
-		std::erase_if(_recentShares, [](const auto& entry) {return nowU64() - entry.timestamp >= recentSharesTime;});
-		roundsHtmlStr += "<h2>Active workers for the last "s + formattedDuration(recentSharesTime) + "</h2>"s;
-		
+
+		roundsHtmlStr += "<h2>Active workers for the last "s
+			+ formattedDuration(recentSharesTime) + "</h2>"s;
+
 		std::map<std::string, std::pair<uint32_t, uint32_t>> activeWorkers;
 		uint32_t validShares(0U);
-		for (uint64_t i(0) ; i < _recentShares.size() ; i++) {
-			if (activeWorkers.find(_recentShares[i].finder) == activeWorkers.end())
-				activeWorkers[_recentShares[i].finder] = std::make_pair(0U, 0U);
-			if (_recentShares[i].valid) {
-				activeWorkers[_recentShares[i].finder].first++;
+
+		for (const auto &share : recentSharesSnapshot) {
+			if (activeWorkers.find(share.finder) == activeWorkers.end())
+				activeWorkers[share.finder] = std::make_pair(0U, 0U);
+
+			if (share.valid) {
+				activeWorkers[share.finder].first++;
 				validShares++;
 			}
 			else
-				activeWorkers[_recentShares[i].finder].second++;
+				activeWorkers[share.finder].second++;
 		}
-		
+
 		roundsHtmlStr += "<table><tr><th>Worker</th><th>Shares (invalid)</th><th>%</th></tr>"s;
-		for (const auto &activeWorker: activeWorkers) {
-			roundsHtmlStr += "<tr><td>"s + activeWorker.first + "</td><td>"s + std::to_string(activeWorker.second.first) + " ("s + std::to_string(activeWorker.second.second) + ")</td><td>"s + std::to_string(100.*static_cast<double>(activeWorker.second.first)/static_cast<double>(validShares)) + "</td></tr>"s;
+
+		for (const auto &activeWorker : activeWorkers) {
+			const double percentage = validShares > 0
+				? 100. * static_cast<double>(activeWorker.second.first)
+					/ static_cast<double>(validShares)
+				: 0.;
+
+			roundsHtmlStr += "<tr><td>"s + activeWorker.first
+				+ "</td><td>"s
+				+ std::to_string(activeWorker.second.first)
+				+ " ("s + std::to_string(activeWorker.second.second)
+				+ ")</td><td>"s + std::to_string(percentage)
+				+ "</td></tr>"s;
 		}
+
 		roundsHtmlStr += "</table>"s;
-		
 		roundsHtmlStr += "<h2>Last Blocks</h2>"s;
-		
 		roundsHtmlStr += "<table><tr><th>Round</th><th>Block</th><th>Time (duration)</th><th>Confirmations</th><th>Difficulty</th><th>Reward</th><th>Shares</th><th>Finder</th></tr>"s;
-		for (int i(_rounds.size() - 2) ; i >= std::max((int) _rounds.size() - 26, 0) ; i--) {
-			roundsHtmlStr += "<tr><td>"s + std::to_string(_rounds[i].id) + "</td><td><a href=\"https://riecoin.xyz/Explorer/Block/"s + _rounds[i].blockHash.value() + "\">"s + std::to_string(_rounds[i].heightEnd.value()) + "</a></td><td>"s + timeStr(_rounds[i].timeEnd.value()) + " ("s + formattedDuration(_rounds[i].timeEnd.value() - _rounds[i].timeStart) + ")"s + "</td><td>"s + (_rounds[i].confirmations >= 0 ? std::to_string(_rounds[i].confirmations) + "/100"s : "Orphaned"s) + "</td><td>"s + std::to_string(_rounds[i].difficulty.value()) + "</td><td>"s + amountStr(static_cast<double>(_rounds[i].reward.value())/1e8) + " RIC</td><td>"s + std::to_string(_rounds[i].shares) + "</td><td>"s + _rounds[i].finder.value() + "</td></tr>"s;
+
+		if (roundsSnapshot.size() >= 2) {
+			const std::size_t firstRoundToDisplay =
+				roundsSnapshot.size() > 26 ? roundsSnapshot.size() - 26 : 0;
+
+			for (std::size_t i(roundsSnapshot.size() - 1); i-- > firstRoundToDisplay;) {
+				const auto &round = roundsSnapshot[i];
+
+				if (!round.heightEnd || !round.timeEnd || !round.blockHash
+					|| !round.difficulty || !round.reward || !round.finder)
+					continue;
+
+				roundsHtmlStr += "<tr><td>"s + std::to_string(round.id)
+					+ "</td><td><a href=\"https://riecoin.xyz/Explorer/Block/"s
+					+ round.blockHash.value() + "\">"
+					+ std::to_string(round.heightEnd.value())
+					+ "</a></td><td>"s
+					+ timeStr(round.timeEnd.value()) + " ("s
+					+ formattedDuration(round.timeEnd.value() - round.timeStart)
+					+ ")"s + "</td><td>"
+					+ (round.confirmations >= 0
+						? std::to_string(round.confirmations) + "/100"s
+						: "Orphaned"s)
+					+ "</td><td>"s + std::to_string(round.difficulty.value())
+					+ "</td><td>"s
+					+ amountStr(static_cast<double>(round.reward.value()) / 1e8)
+					+ " RIC</td><td>"s + std::to_string(round.shares)
+					+ "</td><td>"s + round.finder.value()
+					+ "</td></tr>"s;
+			}
 		}
-		roundsHtmlStr += "</table><p><a href=\""s + configuration.options().statsJsonFile + "\">All Rounds for this Session in Json</a></p>"s;
+
+		roundsHtmlStr += "</table><p><a href=\""s
+			+ configuration.options().statsJsonFile
+			+ "\">All Rounds for this Session in Json</a></p>"s;
 		roundsHtmlStr += "</body></html>"s;
+
 		std::ofstream jsonFile(configuration.options().statsJsonFile, std::ios::out),
-		              htmlFile(configuration.options().statsHtmlFile, std::ios::out);
+			htmlFile(configuration.options().statsHtmlFile, std::ios::out);
+
 		if (jsonFile)
 			jsonFile << roundsJsonStr << std::flush;
 		else
-			std::cerr << "Unable to write to file "s << configuration.options().statsJsonFile << std::endl;
+			std::cerr << "Unable to write to file "s
+				<< configuration.options().statsJsonFile << std::endl;
+
 		if (htmlFile)
 			htmlFile << roundsHtmlStr << std::flush;
 		else
-			std::cerr << "Unable to write debug output to file "s << configuration.options().statsHtmlFile << std::endl;
-		
+			std::cerr << "Unable to write debug output to file "s
+				<< configuration.options().statsHtmlFile << std::endl;
+
 		latestDbUpdateTp = std::chrono::steady_clock::now();
-		while (timeSince(latestDbUpdateTp) < configuration.options().statsUpdateInterval && _running) // Simple way to quit with for example Ctrl + C without having to wait for the full statsUpdateInterval
+
+		while (timeSince(latestDbUpdateTp) < configuration.options().statsUpdateInterval && _running)
 			std::this_thread::sleep_for(std::chrono::duration<double>(0.25));
 	}
+
 	curl_easy_cleanup(curlStatsUpdater);
 }
 
@@ -755,9 +984,7 @@ void Pool::run() {
 			if ((events[i].events & EPOLLERR) || (events[i].events & EPOLLHUP) || (!(events[i].events & EPOLLIN))) {
 				LOGMSG("Connection on fd " << events[i].data.fd << " closed");
 				close(events[i].data.fd);
-				auto workerIt(_workers.find(events[i].data.fd));
-				if (workerIt != _workers.end())
-					_workers.erase(workerIt);
+				_removeWorker(events[i].data.fd);
 				continue;
 			}
 			else if (events[i].data.fd == poolFd) { // New connection(s)
@@ -794,6 +1021,16 @@ void Pool::run() {
 						continue;
 					}
 					_workers[newWorker->fileDescriptor] = newWorker;
+					{
+						const std::lock_guard lock(_stateMutex);
+						WorkerStats stats;
+						stats.id = newWorker->id;
+						stats.ip = newWorker->ip;
+						stats.port = newWorker->port;
+						stats.connectedAt = nowU64();
+						_workerStats[newWorker->id] = std::move(stats);
+					}
+					_workerCount.fetch_add(1, std::memory_order_relaxed);
 					LOGMSG("Accepted connection from new " << newWorker->str() << ". Workers: " << _workers.size());
 				}
 			}
@@ -818,13 +1055,13 @@ void Pool::run() {
 					if (receivedMessage.size() > maxMessageLength) { // Ignore unreasonably long message (possible bug)
 						LOGMSG("Ignoring long message of " << receivedMessage.size() << " bytes and kicking " << worker->str());
 						close(events[i].data.fd);
-						_workers.erase(events[i].data.fd);
+						_removeWorker(events[i].data.fd);
 						break;
 					}
 					if (count == -1) { // Either message fully reconstructed, or something went wrong
 						if (errno != EAGAIN && errno != EWOULDBLOCK) {
 							close(events[i].data.fd);
-							_workers.erase(events[i].data.fd);
+							_removeWorker(events[i].data.fd);
 							LOGMSG("Connection with " << worker->str() << " closed, errno " << errno << " - " << std::strerror(errno) << ". Workers: " << _workers.size());
 							break;
 						}
@@ -838,7 +1075,7 @@ void Pool::run() {
 							if (reply.second) {
 								LOGMSG("Disconnecting " << worker->str());
 								close(events[i].data.fd);
-								_workers.erase(events[i].data.fd);
+								_removeWorker(events[i].data.fd);
 								break;
 							}
 						}
@@ -846,7 +1083,7 @@ void Pool::run() {
 					}
 					else if (count == 0) { // The worker disconected
 						close(events[i].data.fd);
-						_workers.erase(events[i].data.fd);
+						_removeWorker(events[i].data.fd);
 						LOGMSG(worker->str() << " disconected. Workers: " << _workers.size());
 						break;
 					}
@@ -857,9 +1094,17 @@ void Pool::run() {
 			const std::string disconnectMessage("{\"id\": null, \"method\": \"client.show_message\", \"params\": [\"Worker disconnected due to inactivity\"]}\n"s);
 			if (timeSince(it->second->latestShareTp) > maxInactivityTime) {
 				LOGMSG("Disconnecting inactive " << it->second->str());
-				write(it->second->fileDescriptor, disconnectMessage.c_str(), disconnectMessage.size());
+				const ssize_t bytesWritten = write(
+					it->second->fileDescriptor,
+					disconnectMessage.c_str(),
+					disconnectMessage.size()
+				);
+				if (bytesWritten == -1)
+					LOGMSG("Failed to send inactivity disconnect message: " << std::strerror(errno));
 				close(it->second->fileDescriptor);
-				it = _workers.erase(it);
+				const int fileDescriptor = it->first;
+				++it;
+				_removeWorker(fileDescriptor);
 			}
 			else
 				it++;

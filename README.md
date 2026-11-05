@@ -304,7 +304,7 @@ apt install g++ make git libcurl4-openssl-dev libgmp-dev nlohmann-json3-dev
 Download the source code and compile:
 
 ```bash
-git clone https://github.com/Pttn/StellaPool-Mini.git
+git clone https://github.com/krewshul/StellaPool-Mini_krews_fork
 cd StellaPool-Mini
 cd Cpp
 make

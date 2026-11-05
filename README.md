@@ -1,19 +1,83 @@
 # StellaPool-Mini
 
-StellaPool-Mini is a minimalist private Riecoin mining pool software, initially a simplified version of [StellaPool](https://github.com/Pttn/StellaPool/), intended for "large" solo miners with lots of powerful machines who may desire a way to effectively "share" a Riecoin Core node across the machines and easily monitor the status of the machines and their contributions, but who would not need most of the features of a public mining pool.
+StellaPool-Mini is a minimalist private Riecoin mining pool software, initially developed as a simplified version of [StellaPool](https://github.com/Pttn/StellaPool/).
 
-It is designed to be quickly usable and simple, so many features such as antispam measures, databases (no additional dependencies nor setup needed), Pool Fee, or withdrawals, are not implemented. If you want some of these features then you should use the "full" StellaPool instead. On the other hand, if you just have one or a few machines then you should just use the rieMiner's Solo Mining Mode and not bother with setting up a pool.
+It is intended for larger solo miners running multiple powerful machines who want to share a single Riecoin Core node across their mining systems and monitor the status and contributions of individual workers, without needing most of the features of a public mining pool.
 
-StellaPool-Mini is not meant to be a reference code, and we encourage users to modify it heavily to make it the way they want. The idea is that you just take the code, change it as you like, and forget about the present repository. Though, you may still look once a while at the commits, especially if there are changes in order to support new Riecoin Core releases. No compatibility is guaranteed, configurations may break with new code, no particular support is provided and users are expected to be knowledgeable and autonomous.
+The project is designed to be simple to build, configure, and operate. Features such as antispam measures, databases, pool fees, and withdrawals are intentionally not implemented. If you need these features, you should use the full StellaPool instead. If you only have one or a few mining machines, rieMiner's Solo Mining Mode may be a more suitable option.
 
-For now, it is written in C++, but there may be implementations in other languages in the future to make its use even more convenient in some cases, or it may also be integrated into Riecoin Core someday.
+StellaPool-Mini is not intended to be reference code. Users are encouraged to modify it to suit their own requirements. The idea is that you take the code, customize it, and maintain your own version. You may occasionally want to check the original repository for changes, particularly updates needed to support new Riecoin Core releases.
+
+No compatibility is guaranteed, configurations may change, and users are expected to be knowledgeable and autonomous.
+
+StellaPool-Mini is currently written in C++.
+
+## Features
+
+### Private Mining Pool
+
+- Lightweight private Riecoin mining pool.
+- Shares a Riecoin Core node across multiple mining workers.
+- Supports multiple workers connecting to a single pool instance.
+- Configurable pool address and connection port.
+- No database or additional database setup required.
+- Generates and submits block candidates through Riecoin Core.
+
+### Worker Tracking
+
+Worker information is collected and maintained by the pool.
+
+Tracked information includes:
+
+- Unique worker ID.
+- Worker name.
+- IP address and connection port.
+- Connection timestamp.
+- Disconnection timestamp.
+- Last submitted share timestamp.
+- Accepted share count.
+- Rejected share count.
+- Best share prime count.
+
+### Share Tracking
+
+The pool records accepted and rejected share submissions.
+
+Tracked information includes:
+
+- Share submission timestamp.
+- Worker ID.
+- Finder name.
+- Share acceptance status.
+- Rejection reason.
+- Prime count, when available.
+- Minimum required prime count, when available.
+
+The pool maintains a rolling history of the most recent 1,000 share records.
+
+### Pool Statistics
+
+The pool maintains aggregate statistics, including:
+
+- Current connected worker count.
+- Total accepted shares.
+- Total rejected shares.
+
+### Statistics Export
+
+Statistics are exported to JSON and HTML files.
+
+The JSON export provides structured information about pool activity, mining rounds, individual workers, and recent share submissions. This data can be used by external monitoring applications, scripts, or custom dashboards.
+
+The HTML statistics page continues to provide a browser-based overview of pool activity.
 
 ## Usage
 
-Firstly, read the sections below to build and set up StellaPool-Mini. Here is a configuration template,
+First, read the sections below to build and configure StellaPool-Mini.
 
+Here is a basic configuration template:
 
-```bash
+```ini
 PoolAddress = ric1p...
 PoolPort = 2005
 WalletHost = 127.0.0.1
@@ -27,21 +91,170 @@ WalletCookie = /home/stella/.riecoin/.cookie
 StatsUpdateInterval = 30
 ```
 
-Once done, run it. As a private pool, a StellaPool-Mini instance should only be reached by trusted workers just like your Riecoin Core instance (there is no particular check on the worker names, etc), so configure your firewall accordingly if needed, etc.
+Once configured, start the pool.
 
-Then, connect your miners as if they were doing Pooled Mining, point them to your private pool. You can use any username and as you wish, for example one per machine or one per cluster... The names are used to identify your workers so if two workers have the same name then they will be considered as a single one for statistical purposes. The password is irrelevant.
+As a private pool, a StellaPool-Mini instance should only be accessible to trusted workers, just like your Riecoin Core instance. There are no particular checks on worker names or passwords, so configure your firewall accordingly.
 
-StellaPool-Mini generates a Html page that is regularly updated. Open it in a Web Browser to monitor the status of your workers and latest block found.
+Connect your miners as if they were using pooled mining, pointing them to your private pool.
 
-Note that every time you restart the Pool, if you set a particular file name for the statistics, it will be **overwritten**. It is intended behavior since we assume that the user mainly cares about the *current* status of the workers, and blocks found can always be retrieved by entering the Pool Address in an Explorer. If no filename is set then them having a timestamp by default allows to retrieve previous sessions.
+You can use any worker username you like, such as one name per machine or one name per cluster. Worker names are used to identify workers for statistical purposes. The password is irrelevant.
+
+Open the generated HTML statistics page in a web browser to monitor pool activity.
+
+The JSON statistics file can also be used to build a custom dashboard or integrate pool statistics into external monitoring applications.
+
+**Important:** When the pool is restarted, a statistics file configured with a specific filename will be overwritten. This is intentional, as the statistics are primarily intended to represent the current pool session. Blocks found can always be retrieved by entering the pool address in a blockchain explorer. If no filename is configured, a timestamped filename is generated by default, allowing previous sessions to be retained.
+
+## JSON Statistics Structure
+
+The `Stats.json` file contains four top-level sections:
+
+```json
+{
+    "pool": {},
+    "rounds": [],
+    "workers": [],
+    "recentShares": []
+}
+```
+
+Each section provides a different view of pool activity.
+
+### Pool
+
+The `pool` object contains aggregate statistics for the pool.
+
+```json
+"pool": {
+    "workerCount": 2,
+    "acceptedShares": 30,
+    "rejectedShares": 1
+}
+```
+
+| Field | Description |
+|---|---|
+| `workerCount` | Number of workers currently connected to the pool. |
+| `acceptedShares` | Total number of accepted shares received by the pool. |
+| `rejectedShares` | Total number of rejected shares received by the pool. |
+
+### Rounds
+
+The `rounds` array contains the pool's mining round statistics. This retains the existing round information.
+
+```json
+"rounds": [
+    {
+        "heightStart": 2665240,
+        "heightEnd": null,
+        "timeStart": 1792036613,
+        "timeEnd": null,
+        "shares": 30
+    }
+]
+```
+
+| Field | Description |
+|---|---|
+| `heightStart` | Block height at which the round started. |
+| `heightEnd` | Block height at which the round ended. Null while the round is ongoing. |
+| `timeStart` | Unix timestamp when the round started. |
+| `timeEnd` | Unix timestamp when the round ended. Null while the round is ongoing. |
+| `shares` | Number of shares submitted during the round. |
+
+### Workers
+
+The `workers` array contains statistics for individual workers.
+
+```json
+"workers": [
+    {
+        "id": 0,
+        "name": "worker01",
+        "ip": "192.168.0.193",
+        "port": 12345,
+        "connectedAt": 1792036000,
+        "disconnectedAt": null,
+        "lastShareAt": 1792036613,
+        "acceptedShares": 12,
+        "rejectedShares": 0,
+        "bestSharePrimeCount": 5
+    }
+]
+```
+
+| Field | Description |
+|---|---|
+| `id` | Unique worker ID assigned by the pool. |
+| `name` | Worker name supplied during authentication. |
+| `ip` | IP address of the worker. |
+| `port` | Port used by the worker connection. |
+| `connectedAt` | Unix timestamp when the worker connected. |
+| `disconnectedAt` | Unix timestamp when the worker disconnected. Null while connected. |
+| `lastShareAt` | Unix timestamp when the worker last submitted a share. |
+| `acceptedShares` | Total number of shares accepted from this worker. |
+| `rejectedShares` | Total number of shares rejected from this worker. |
+| `bestSharePrimeCount` | Highest prime count achieved by a share submitted by this worker. |
+
+### Recent Shares
+
+The `recentShares` array contains the most recent share submissions from all workers.
+
+The pool retains up to 1,000 records. Older records are removed as new shares arrive.
+
+```json
+"recentShares": [
+    {
+        "timestamp": 1792036613,
+        "workerId": 0,
+        "finder": "worker01",
+        "valid": true,
+        "rejectReason": "",
+        "primeCount": 5,
+        "minimumPrimeCount": 5
+    }
+]
+```
+
+| Field | Description |
+|---|---|
+| `timestamp` | Unix timestamp when the share was submitted. |
+| `workerId` | ID of the worker that submitted the share. |
+| `finder` | Worker/finder name associated with the share. |
+| `valid` | Whether the share was accepted. |
+| `rejectReason` | Reason the share was rejected. Empty when accepted. |
+| `primeCount` | Prime count reported for the share, when available. |
+| `minimumPrimeCount` | Minimum required prime count for the share, when available. |
+
+The `primeCount` and `minimumPrimeCount` fields can be null when the information is unavailable, such as for certain malformed submissions.
+
+### Timestamps and Updates
+
+All timestamps are Unix timestamps, representing the number of seconds since January 1, 1970 UTC.
+
+The JSON and HTML statistics files are updated according to `StatsUpdateInterval`.
+
+The JSON structure makes it possible to build external tools that can display:
+
+- Current pool activity.
+- Connected workers.
+- Individual worker performance.
+- Accepted and rejected share counts.
+- Best share performance.
+- Recent share submissions and rejection reasons.
+- Mining round history.
+
+**Note:** The JSON statistics format has been expanded from the original format. Round information is now contained in the `rounds` array, rather than being stored directly as the root JSON array. Existing scripts that consume the old format will need to be updated accordingly.
 
 ## Preparation
 
 ### Configure Riecoin Core
 
-First, configure Riecoin Core using the `riecoin.conf` file. Here is a basic template:
+First, configure Riecoin Core using the `riecoin.conf` file.
 
-```
+Here is a basic configuration template:
+
+```ini
 daemon=1
 server=1
 txindex=1
@@ -60,29 +273,35 @@ port=38333
 rpcbind=127.0.0.1
 ```
 
-Once you are ready, start Riecoin Core (Mainnet, Testnet, or both, depending on your goal). If needed, create a new wallet and generate an address where block rewards will be sent before being redistributed to miners. Of course, make sure that the synchronization is done.
+Once configured, start Riecoin Core (Mainnet, Testnet, or both, depending on your goal).
 
-If you wish to support both Mainnet and Testnet, you must run two separate instances (or mod heavily the code).
+If needed, create a new wallet and generate an address where block rewards will be sent.
+
+Make sure Riecoin Core has finished synchronizing before starting the pool.
+
+If you wish to support both Mainnet and Testnet, you must run two separate instances or heavily modify the code.
 
 ## Compile the Private Pool
 
-You must have a recent enough Linux and an appropriate compiler with C++20 support. Other and old operating systems are not supported.
+You must have a sufficiently recent Linux distribution and an appropriate compiler with C++20 support. Other and older operating systems are not supported.
 
-### On Debian/Ubuntu
+### Debian / Ubuntu
 
-You can get the source code with Git and compile this C++ program with g++ and make, install them if needed. Then, get if needed the following dependencies:
+You can obtain the source code with Git and compile the C++ program using `g++` and `make`.
 
-* [Curl](https://curl.haxx.se/)
-* [GMP](https://gmplib.org/)
-* [NLohmann Json](https://json.nlohmann.me/)
+Install the required build tools and dependencies if needed:
 
-On Debian 12, you can easily install these by doing as root:
+- [Curl](https://curl.haxx.se/)
+- [GMP](https://gmplib.org/)
+- [Nlohmann JSON](https://json.nlohmann.me/)
+
+On Debian 12, these can be installed as root:
 
 ```bash
 apt install g++ make git libcurl4-openssl-dev libgmp-dev nlohmann-json3-dev
 ```
 
-Then, download the source files, go/`cd` to the directory, and run `make`:
+Download the source code and compile:
 
 ```bash
 git clone https://github.com/Pttn/StellaPool-Mini.git
@@ -91,11 +310,13 @@ cd Cpp
 make
 ```
 
-For other Linux, executing equivalent commands (using `pacman` instead of `apt`,...) should work.
+For other Linux distributions, equivalent package installation commands should work (for example, using `pacman` instead of `apt`).
 
 ## Configure the Private Pool
 
-StellaPool-Mini uses a text configuration file, by default a `Pool.conf` file next to the executable. It is also possible to use custom paths, examples:
+StellaPool-Mini uses a text configuration file. By default, it looks for a `Pool.conf` file next to the executable.
+
+You can also specify a custom configuration file when launching the pool:
 
 ```bash
 ./StellaPoolM config/example.txt
@@ -103,41 +324,50 @@ StellaPool-Mini uses a text configuration file, by default a `Pool.conf` file ne
 ./StellaPoolM /home/user/Pool/Pool.conf
 ```
 
-Each option is set by a line like
+Each configuration option is specified on its own line:
 
-```
+```ini
 Option = Value
 ```
 
-It is case sensitive. A line starting with `#` will be ignored, as well as invalid ones. Spaces or tabs just before or after `=` are also trimmed. If an option is missing, the default value(s) will be used. If there are duplicate lines for the same option, the last one will be used.
+Configuration options are case-sensitive.
 
-### Settings
+Lines beginning with `#` are ignored, as are invalid configuration lines. Spaces or tabs immediately before or after `=` are trimmed.
 
-* `PoolAddress`: the Block Rewards are generated with this Riecoin address. You can use Bech32 "ric1" addresses (only lowercase). Default: a donation address
-* `PoolPort`: the port the miners connect and send shares to. Default: 2005
-* `WalletHost`: the IP of the Riecoin server. Default: 127.0.0.1
-* `WalletPort`: the port of the Riecoin server (same as rpcport in riecoin.conf). Default: 28332 (default RPC port for Riecoin Core)
-* `WalletName`: the name of the wallet, set this if you created multiple wallets in Riecoin Core. Default: empty
-* `WalletUsername`: the username used to connect to the Riecoin server (same as rpcuser in riecoin.conf). Default: empty
-* `WalletPassword`: the password used to connect to the Riecoin server (same as rpcpassword in riecoin.conf). Default: empty
-* `WalletCookie`: the cookie file containing the credentials, overriding `WalletUsername` and `WalletPassword`. Default: empty/none.
-* `StatsJsonFile`: the Json file where statistics (for now just Round data) are being stored. Default: SPM_YYYY-MM-DD_hhmmss.json
-* `StatsHtmlFile`: the Html page where one can see an overview of the statistics. Default: SPM_YYYY-MM-DD_hhmmss.html
-* `StatsUpdateInterval`: how often in s to update the stats. Default: 30
+If an option is missing, its default value is used. If an option appears more than once, the last occurrence is used.
 
-## Developers and license
+### Configuration Settings
 
-* [Pttn](https://github.com/Pttn), author and maintainer. You can reach me on the [Riecoin Forum](https://riecoin.xyz/Forum).
+| Setting | Description | Default |
+|---|---|---|
+| `PoolAddress` | Riecoin address receiving block rewards. Bech32 `ric1` addresses must be lowercase. | Donation address |
+| `PoolPort` | Port miners connect to when submitting shares. | `2005` |
+| `WalletHost` | IP address or hostname of the Riecoin Core server. | `127.0.0.1` |
+| `WalletPort` | RPC port of the Riecoin Core server. | `28332` |
+| `WalletName` | Wallet name, useful when multiple wallets are configured in Riecoin Core. | Empty |
+| `WalletUsername` | RPC username, corresponding to `rpcuser` in `riecoin.conf`. | Empty |
+| `WalletPassword` | RPC password, corresponding to `rpcpassword` in `riecoin.conf`. | Empty |
+| `WalletCookie` | Cookie file containing RPC credentials. Overrides `WalletUsername` and `WalletPassword`. | Empty |
+| `StatsJsonFile` | JSON statistics output file. | Timestamped `SPM_YYYY-MM-DD_hhmmss.json` |
+| `StatsHtmlFile` | HTML statistics output file. | Timestamped `SPM_YYYY-MM-DD_hhmmss.html` |
+| `StatsUpdateInterval` | Interval, in seconds, between statistics updates. | `30` |
+
+## Developers and License
+
+- [Pttn](https://github.com/Pttn) — Original author.
+- [krewshul](https://github.com/krewshul) — Maintainer of this branch.
 
 This work is released under the MIT license.
 
 ## Contributing
 
-You are welcomed to make Pull Requests bringing improvements that would benefit anyone using the software.
+Pull requests bringing improvements that benefit other StellaPool-Mini users are welcome.
 
-By contributing to StellaPool-Mini, you accept to place your code under the MIT license.
+By contributing to StellaPool-Mini, you agree to release your code under the MIT license.
 
-Donations welcome:
+## Donations
 
-* Riecoin: ric1qpttn5u8u9470za84kt4y0lzz4zllzm4pyzhuge
-* Bitcoin: bc1qpttn5u8u9470za84kt4y0lzz4zllzm4pwvel4c
+Donations are welcome:
+PTTN's address's
+- **Riecoin:** `ric1qpttn5u8u9470za84kt4y0lzz4zllzm4pyzhuge`
+- **Bitcoin:** `bc1qpttn5u8u9470za84kt4y0lzz4zllzm4pwvel4c`
